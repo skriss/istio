@@ -179,7 +179,7 @@ func (esc *endpointSliceController) GetProxyServiceTargets(proxy *model.Proxy) [
 }
 
 func serviceNameForEndpointSlice(labels map[string]string) string {
-	return labels[v1.LabelServiceName]
+	return labels["k8s.ovn.org/service-name"]
 }
 
 func (esc *endpointSliceController) serviceTargets(ep *v1.EndpointSlice, proxy *model.Proxy) []model.ServiceTarget {
@@ -438,7 +438,7 @@ func (e *endpointSliceCache) has(hostname host.Name) bool {
 
 func endpointSliceSelectorForService(name string) klabels.Selector {
 	return klabels.Set(map[string]string{
-		v1.LabelServiceName: name,
+		"k8s.ovn.org/service-name": name,
 	}).AsSelectorPreValidated().Add(*endpointSliceRequirement)
 }
 

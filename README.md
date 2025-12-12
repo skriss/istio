@@ -1,130 +1,240 @@
-# Istio
+# Deploying Istio with OVN-K Primary UDNs
 
-[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1395/badge)](https://bestpractices.coreinfrastructure.org/projects/1395)
-[![Go Report Card](https://goreportcard.com/badge/github.com/istio/istio)](https://goreportcard.com/report/github.com/istio/istio)
-[![GoDoc](https://godoc.org/istio.io/istio?status.svg)](https://godoc.org/istio.io/istio)
+This README walks through creating two ClusterUserDefinedNetworks on an OCP cluster and installing one instance of Istio per CUDN.
 
-<a href="https://istio.io/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cncf/artwork/refs/heads/main/projects/istio/icon/color/istio-icon-color.svg">
-      <source media="(prefers-color-scheme: light)" srcset="https://github.com/istio/istio/raw/master/logo/istio-bluelogo-whitebackground-unframed.svg">
-      <img title="Istio" height="100" width="100" alt="Istio logo" src="https://github.com/istio/istio/raw/master/logo/istio-bluelogo-whitebackground-unframed.svg">
-    </picture>
-</a>
+## Prerequisites
 
----
+An existing OCP cluster with OVN-K installed with User-Defined Network / Cluster User-Defined Network support. This walkthrough was tested on a 4.19 cluster.
 
-Istio is an open source service mesh that layers transparently onto existing distributed applications. Istio’s powerful features provide a uniform and more efficient way to secure, connect, and monitor services. Istio is the path to load balancing, service-to-service authentication, and monitoring – with few or no service code changes.
+## Steps
 
-- For in-depth information about how to use Istio, visit [istio.io](https://istio.io)
-- To ask questions and get assistance from our community, visit [GitHub Discussions](https://github.com/istio/istio/discussions)
-- To learn how to participate in our overall community, visit [our community page](https://istio.io/about/community)
+1. Clone the Sail Operator repo and install the operator.
 
-In this README:
+```bash
+git clone https://github.com/istio-ecosystem/sail-operator.git
+cd sail-operator
+git checkout release-1.28
+make deploy
+```
 
-- [Introduction](#introduction)
-- [Repositories](#repositories)
-- [Issue management](#issue-management)
+1. Create the necessary namespaces.
 
-In addition, here are some other documents you may wish to read:
+```bash
+kubectl create namespace istio-cni
 
-- [Istio Community](https://github.com/istio/community#istio-community) - describes how to get involved and contribute to the Istio project
-- [Istio Developer's Guide](https://github.com/istio/istio/wiki/Preparing-for-Development) - explains how to set up and use an Istio development environment
-- [Project Conventions](https://github.com/istio/istio/wiki/Development-Conventions) - describes the conventions we use within the code base
-- [Creating Fast and Lean Code](https://github.com/istio/istio/wiki/Writing-Fast-and-Lean-Code) - performance-oriented advice and guidelines for the code base
+namespaces_without_injection=("istio-system-red" "istio-system-blue")
+for ns in "${namespaces_without_injection[@]}"; do
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $ns
+  labels:
+    k8s.ovn.org/primary-user-defined-network: ""
+EOF
+done
 
-You'll find many other useful documents on our [Wiki](https://github.com/istio/istio/wiki).
+namespaces_with_injection=("sleep-red" "httpbin-red")
+for ns in "${namespaces_with_injection[@]}"; do
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $ns
+  labels:
+    k8s.ovn.org/primary-user-defined-network: ""
+    istio.io/rev: istio-red
+EOF
+done
 
-## Introduction
+namespaces_with_injection=("sleep-blue" "httpbin-blue")
+for ns in "${namespaces_with_injection[@]}"; do
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $ns
+  labels:
+    k8s.ovn.org/primary-user-defined-network: ""
+    istio.io/rev: istio-blue
+EOF
+done
+```
 
-[Istio](https://istio.io/latest/docs/concepts/what-is-istio/) is an open platform for providing a uniform way to [integrate
-microservices](https://istio.io/latest/docs/examples/microservices-istio/), manage [traffic flow](https://istio.io/latest/docs/concepts/traffic-management/) across microservices, enforce policies
-and aggregate telemetry data. Istio's control plane provides an abstraction
-layer over the underlying cluster management platform, such as Kubernetes.
+1. Create the ClusterUserDefinedNetworks (CUDNs).
 
-Istio is composed of these components:
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: cudn-red
+spec:
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values: ["sleep-red", "httpbin-red", "istio-system-red"]
+  network:
+    topology: Layer3
+    layer3:
+      role: Primary
+      subnets:
+        - cidr: 22.222.0.0/16
+          hostSubnet: 24
+EOF
 
-- **Envoy** - Sidecar proxies per microservice to handle ingress/egress traffic
-   between services in the cluster and from a service to external
-   services. The proxies form a _secure microservice mesh_ providing a rich
-   set of functions like discovery, rich layer-7 routing, circuit breakers,
-   policy enforcement and telemetry recording/reporting
-   functions.
+cat <<EOF | oc apply -f -
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: cudn-blue
+spec:     
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values: ["sleep-blue", "httpbin-blue", "istio-system-blue"]
+  network:
+    topology: Layer3
+    layer3:
+      role: Primary
+      subnets:
+        - cidr: 22.233.0.0/16
+          hostSubnet: 24
+EOF
+```
 
-  > Note: The service mesh is not an overlay network. It
-  > simplifies and enhances how microservices in an application talk to each
-  > other over the network provided by the underlying platform.
+1. Deploy istio-cni.
 
-- **Istiod** - The Istio control plane. It provides service discovery, configuration and certificate management. It consists of the following sub-components:
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: sailoperator.io/v1
+kind: IstioCNI
+metadata:
+  name: default
+spec:
+  version: v1.28.1
+  namespace: istio-cni
+EOF
+```
 
-    - **Pilot** - Responsible for configuring the proxies at runtime.
+1. Deploy two instances of istiod.
 
-    - **Citadel** - Responsible for certificate issuance and rotation.
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: sailoperator.io/v1
+kind: Istio
+metadata:
+  name: istio-red
+spec:
+  version: v1.28.1
+  namespace: istio-system-red
+  updateStrategy:
+    type: InPlace
+    inactiveRevisionDeletionGracePeriodSeconds: 30
+  values:
+    pilot:
+      image: quay.io/skriss/pilot:ovnk-udn
+      podAnnotations:
+        k8s.ovn.org/open-default-ports: |
+          - protocol: tcp
+            port: 15017
+          - protocol: tcp
+            port: 15012
+          - protocol: tcp
+            port: 8080
+          - protocol: tcp
+            port: 15010
+          - protocol: tcp
+            port: 15014
+    global:
+      imagePullPolicy: "Always"
+    meshConfig:
+      accessLogFile: /dev/stdout
+      discoverySelectors:
+        - matchExpressions:
+            - key: kubernetes.io/metadata.name
+              operator: In
+              values: ["sleep-red", "httpbin-red", "istio-system-red"]       
+EOF
 
-    - **Galley** - Responsible for validating, ingesting, aggregating, transforming and distributing config within Istio.
+cat <<EOF | oc apply -f -
+apiVersion: sailoperator.io/v1
+kind: Istio
+metadata:
+  name: istio-blue
+spec:
+  version: v1.28.1
+  namespace: istio-system-blue
+  updateStrategy:
+    type: InPlace
+    inactiveRevisionDeletionGracePeriodSeconds: 30
+  values:
+    pilot:
+      image: quay.io/skriss/pilot:ovnk-udn
+      podAnnotations:
+        k8s.ovn.org/open-default-ports: |
+          - protocol: tcp
+            port: 15017
+          - protocol: tcp
+            port: 15012
+          - protocol: tcp
+            port: 8080
+          - protocol: tcp
+            port: 15010
+          - protocol: tcp
+            port: 15014
+    global:
+      imagePullPolicy: "Always"
+    meshConfig:
+      accessLogFile: /dev/stdout
+      discoverySelectors:
+        - matchExpressions:
+            - key: kubernetes.io/metadata.name
+              operator: In
+              values: ["sleep-blue", "httpbin-blue", "istio-system-blue"]
+EOF
+```
 
-- **Operator** - The component provides user friendly options to operate the Istio service mesh.
+1. Deploy the `sleep` and `httpbin` workloads to both CUDNs.
 
-## Repositories
+```bash
+oc apply -n sleep-red -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml
+oc apply -n httpbin-red -f https://raw.githubusercontent.com/sridhargaddam/istio-workspace/refs/heads/main/sample-yamls-ambient/httpbin.yaml
 
-The Istio project is divided across a few GitHub repositories:
+oc apply -n sleep-blue -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml
+oc apply -n httpbin-blue -f https://raw.githubusercontent.com/sridhargaddam/istio-workspace/refs/heads/main/sample-yamls-ambient/httpbin.yaml
+```
 
-- [istio/api](https://github.com/istio/api). This repository defines
-component-level APIs and common configuration formats for the Istio platform.
+1. Test connectivity between workloads in the same CUDN.
 
-- [istio/community](https://github.com/istio/community). This repository contains
-information on the Istio community, including the various documents that govern
-the Istio open source project.
+```bash
+kubectl exec -it -n sleep-red deploy/sleep -- curl -s -i httpbin.httpbin-red.svc.cluster.local:8000/get
 
-- [istio/istio](README.md). This is the main code repository. It hosts Istio's
-core components, install artifacts, and sample programs. It includes:
+kubectl exec -it -n sleep-blue deploy/sleep -- curl -s -i httpbin.httpbin-blue.svc.cluster.local:8000/get
+```
 
-    - [istioctl](istioctl/). This directory contains code for the
-[_istioctl_](https://istio.io/latest/docs/reference/commands/istioctl/) command line utility.
+1. Test that workloads cannot connect to workloads in other CUDNS.
 
-    - [pilot](pilot/). This directory
-contains platform-specific code to populate the
-[abstract service model](https://istio.io/docs/concepts/traffic-management/#pilot), dynamically reconfigure the proxies
-when the application topology changes, as well as translate
-[routing rules](https://istio.io/latest/docs/reference/config/networking/) into proxy specific configuration.
+```bash
+kubectl exec -it -n sleep-blue deploy/sleep -- curl -s -i httpbin.httpbin-red.svc.cluster.local:8000/get
 
-    - [security](security/). This directory contains [security](https://istio.io/latest/docs/concepts/security/) related code,
-including Citadel (acting as Certificate Authority), citadel agent, etc.
+kubectl exec -it -n sleep-red deploy/sleep -- curl -s -i httpbin.httpbin-blue.svc.cluster.local:8000/get
+```
 
-- [istio/proxy](https://github.com/istio/proxy). The Istio proxy contains
-extensions to the [Envoy proxy](https://github.com/envoyproxy/envoy) (in the form of
-Envoy filters) that support authentication, authorization, and telemetry collection.
+1. Check the istio-proxy logs to view access logs.
 
-- [istio/ztunnel](https://github.com/istio/ztunnel). The repository contains the Rust implementation of the ztunnel
-component of Ambient mesh.
+```bash
+kubectl logs -n httpbin-red deploy/httpbin -c istio-proxy | grep GET
 
-- [istio/client-go](https://github.com/istio/client-go). This repository defines
-  auto-generated Kubernetes clients for interacting with Istio resources programmatically.
+kubectl logs -n httpbin-blue deploy/httpbin -c istio-proxy | grep GET
+```
 
-> [!NOTE]
-> Only the `istio/api` and `istio/client-go` repositories expose stable interfaces intended for direct usage as libraries.
+1. Inspect Istio endpoints to verify that they correspond to CUDN IPs, and that only workloads from the same CUDN appear.
 
-## Issue management
+```bash
+istioctl proxy-config endpoints deploy/sleep -n sleep-red | grep httpbin
 
-We use GitHub to track all of our bugs and feature requests. Each issue we track has a variety of metadata:
-
-- **Epic**. An epic represents a feature area for Istio as a whole. Epics are fairly broad in scope and are basically product-level things.
-Each issue is ultimately part of an epic.
-
-- **Milestone**. Each issue is assigned a milestone. This is 0.1, 0.2, ..., or 'Nebulous Future'. The milestone indicates when we
-think the issue should get addressed.
-
-- **Priority**. Each issue has a priority which is represented by the column in the [Prioritization](https://github.com/orgs/istio/projects/6) project. Priority can be one of
-P0, P1, P2, or >P2. The priority indicates how important it is to address the issue within the milestone. P0 says that the
-milestone cannot be considered achieved if the issue isn't resolved.
-
----
-
-<div align="center">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cncf/artwork/refs/heads/main/other/cncf/horizontal/color-whitetext/cncf-color-whitetext.svg">
-      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cncf/artwork/master/other/cncf/horizontal/color/cncf-color.svg">
-      <img width="300" alt="Cloud Native Computing Foundation logo" src="https://raw.githubusercontent.com/cncf/artwork/refs/heads/main/other/cncf/horizontal/color-whitetext/cncf-color-whitetext.svg">
-    </picture>
-    <p>Istio is a <a href="https://cncf.io">Cloud Native Computing Foundation</a> project.</p>
-</div>
+istioctl proxy-config endpoints deploy/sleep -n sleep-blue | grep httpbin
+```
