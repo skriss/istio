@@ -35,6 +35,7 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry/kube"
 	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller/ambient/multicluster"
+	"istio.io/istio/pilot/pkg/serviceregistry/kube/endpointslice"
 	"istio.io/istio/pilot/pkg/serviceregistry/serviceentry"
 	labelutil "istio.io/istio/pilot/pkg/serviceregistry/util/label"
 	"istio.io/istio/pilot/pkg/util/protoconv"
@@ -975,7 +976,7 @@ func matchingServicesWithoutSelectors(
 	// For each IP, find any endpointSlices referencing it.
 	matchedSlices := krt.Fetch(ctx, endpointSlices, krt.FilterIndex(endpointSlicesAddressIndex, tr))
 	for _, es := range matchedSlices {
-		serviceName, f := es.Labels[discovery.LabelServiceName]
+		serviceName, f := endpointslice.GetServiceNameFromLabels(es.Labels)
 		if !f {
 			// Not for a service; we don't care about it.
 			continue
@@ -1196,7 +1197,7 @@ func endpointSlicesBuilder(
 		// We only care about EndpointSlices that are for a Service.
 		// Otherwise, it is just an arbitrary bag of IP addresses for some user-specific purpose, which doesn't have a clear
 		// usage for us (if it had some additional info like service account, etc, then perhaps it would be useful).
-		serviceName, f := es.Labels[discovery.LabelServiceName]
+		serviceName, f := endpointslice.GetServiceNameFromLabels(es.Labels)
 		if !f {
 			return nil
 		}
@@ -1637,7 +1638,7 @@ func endpointSliceAddressIndex(EndpointSlices krt.Collection[*discovery.Endpoint
 			// Currently we do not support FQDN.
 			return nil
 		}
-		_, f := es.Labels[discovery.LabelServiceName]
+		_, f := endpointslice.GetServiceNameFromLabels(es.Labels)
 		if !f {
 			// Not for a service; we don't care about it.
 			return nil

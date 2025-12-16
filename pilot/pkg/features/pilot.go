@@ -326,6 +326,14 @@ var (
 
 	DisableTrackRemainingMetrics = env.Register("DISABLE_TRACK_REMAINING_CB_METRICS", true,
 		"If disabled, the remaining metrics for circuit breakers will not be tracked.").Get()
+
+	EnableOVNKubernetesUDN = env.Register(
+		"PILOT_ENABLE_OVNK_UDN",
+		true,
+		"If enabled, Istio will watch OVN-Kubernetes UDN mirrored EndpointSlices with label 'k8s.ovn.org/service-name'. "+
+			"This enables Istio to provide service connectivity within User-Defined Networks (UDN) on OpenShift. "+
+			"Requires platform to be set to 'openshift'.",
+	).Get()
 )
 
 // UnsafeFeaturesEnabled returns true if any unsafe features are enabled.
