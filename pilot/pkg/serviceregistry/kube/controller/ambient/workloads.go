@@ -53,6 +53,7 @@ import (
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/maps"
 	"istio.io/istio/pkg/network"
+	"istio.io/istio/pkg/platform"
 	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/sets"
@@ -785,6 +786,69 @@ func computeWaypoint(
 	return appTunnel, targetWaypoint
 }
 
+// getCUDNIPsFromEndpointSlices attempts to retrieve C-UDN IPs for a pod from mirrored EndpointSlices created by OVN-K.
+// Returns nil if no CUDN IPs are found, allowing fallback to default pod IPs.
+func getCUDNIPsFromEndpointSlices(
+	ctx krt.HandlerContext,
+	pod *v1.Pod,
+	endpointSlices krt.Collection[*discovery.EndpointSlice],
+	addressIndex krt.Index[TargetRef, *discovery.EndpointSlice],
+) [][]byte {
+	tr := TargetRef{
+		Kind:      gvk.Pod.Kind,
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
+		UID:       pod.UID,
+	}
+
+	// Find EndpointSlices referencing this pod
+	matchedSlices := krt.Fetch(ctx, endpointSlices, krt.FilterIndex(addressIndex, tr))
+
+	// Look for mirrored EndpointSlices with OVN-K CUDN label
+	// When PILOT_ENABLE_OVNK_UDN is enabled, GetServiceNameFromLabels checks for k8s.ovn.org/service-name
+	for _, es := range matchedSlices {
+		serviceName, found := endpointslice.GetServiceNameFromLabels(es.Labels)
+		if !found {
+			// Not a service EndpointSlice, skip
+			continue
+		}
+
+		// Find the specific endpoint entry for this pod
+		for _, ep := range es.Endpoints {
+			// Match by TargetRef to find this pod's endpoint
+			if ep.TargetRef == nil || ep.TargetRef.Kind != gvk.Pod.Kind {
+				continue
+			}
+			if ep.TargetRef.Name != pod.Name || ep.TargetRef.UID != pod.UID {
+				continue
+			}
+
+			// Found the endpoint for this pod
+			if len(ep.Addresses) == 0 {
+				continue
+			}
+
+			// Convert addresses to [][]byte format
+			ips, err := slices.MapErr(ep.Addresses, func(addr string) ([]byte, error) {
+				n, err := netip.ParseAddr(addr)
+				if err != nil {
+					log.Warnf("invalid CUDN address in mirrored endpointslice %s/%s for pod %s/%s: %v",
+						es.Namespace, es.Name, pod.Namespace, pod.Name, err)
+					return nil, err
+				}
+				return n.AsSlice(), nil
+			})
+			if err == nil && len(ips) > 0 {
+				log.Debugf("Using CUDN IPs from mirrored endpointslice %s/%s (service: %s) for pod %s/%s: %v",
+					es.Namespace, es.Name, serviceName, pod.Namespace, pod.Name, ep.Addresses)
+				return ips
+			}
+		}
+	}
+
+	return nil
+}
+
 func podWorkloadBuilder(
 	meshConfig krt.Singleton[MeshConfig],
 	localNetworkGetter func(krt.HandlerContext) network.ID,
@@ -811,20 +875,32 @@ func podWorkloadBuilder(
 		if kubeutil.CheckPodTerminal(p) {
 			return nil
 		}
-		k8sPodIPs := getPodIPs(p)
-		if len(k8sPodIPs) == 0 {
-			return nil
+
+		// Try to get CUDN IPs from mirrored EndpointSlices first (if feature is enabled)
+		var podIPs [][]byte
+		var err error
+
+		if features.EnableOVNKubernetesUDN && platform.IsOpenShift() {
+			podIPs = getCUDNIPsFromEndpointSlices(ctx, p, endpointSlices, endpointSlicesAddressIndex)
 		}
-		podIPs, err := slices.MapErr(k8sPodIPs, func(e v1.PodIP) ([]byte, error) {
-			n, err := netip.ParseAddr(e.IP)
-			if err != nil {
-				return nil, err
+
+		// Fallback to default pod IPs if no CUDN IPs found
+		if len(podIPs) == 0 {
+			k8sPodIPs := getPodIPs(p)
+			if len(k8sPodIPs) == 0 {
+				return nil
 			}
-			return n.AsSlice(), nil
-		})
-		if err != nil {
-			// Is this possible? Probably not in typical case, but anyone could put garbage there.
-			return nil
+			podIPs, err = slices.MapErr(k8sPodIPs, func(e v1.PodIP) ([]byte, error) {
+				n, err := netip.ParseAddr(e.IP)
+				if err != nil {
+					return nil, err
+				}
+				return n.AsSlice(), nil
+			})
+			if err != nil {
+				// Is this possible? Probably not in typical case, but anyone could put garbage there.
+				return nil
+			}
 		}
 		meshCfg := krt.FetchOne(ctx, meshConfig.AsCollection())
 		policies := buildWorkloadPolicies(ctx, authorizationPolicies, peerAuths, meshCfg, p.Labels, p.Namespace)
