@@ -47,6 +47,7 @@ import (
 	"istio.io/istio/pkg/test/framework/components/environment/kube"
 	"istio.io/istio/pkg/test/framework/components/istio/ingress"
 	"istio.io/istio/pkg/test/framework/components/istioctl"
+	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/resource"
 	"istio.io/istio/pkg/test/framework/resource/config/apply"
 	"istio.io/istio/pkg/test/framework/resource/config/cleanup"
@@ -436,6 +437,11 @@ func initIOPFile(cfg Config, iopFile string, valuesYaml string) (*iopv1alpha1.Is
 func (i *istioImpl) installControlPlaneCluster(c cluster.Cluster) error {
 	scopes.Framework.Infof("setting up %s as control-plane cluster", c.Name())
 
+	// Create system namespace with CUDN labels.
+	if err := i.ensureSystemNamespaceWithLabels(c); err != nil {
+		return err
+	}
+
 	if !c.IsConfig() {
 		if err := i.configureRemoteConfigForControlPlane(c); err != nil {
 			return err
@@ -527,6 +533,11 @@ func (i *istioImpl) installRemoteCluster(c cluster.Cluster) error {
 
 // Common install on a either a remote-config or pure remote cluster.
 func (i *istioImpl) installRemoteCommon(c cluster.Cluster, defaultsIOPFile, iopFile string, discovery bool) error {
+	// Create system namespace with CUDN labels.
+	if err := i.ensureSystemNamespaceWithLabels(c); err != nil {
+		return err
+	}
+
 	args := commonInstallArgs(i.ctx, i.cfg, c, defaultsIOPFile, iopFile)
 	if i.env.IsMultiCluster() {
 		// Set the clusterName for the local cluster.
@@ -767,9 +778,16 @@ func (i *istioImpl) deployCACerts() error {
 		}
 
 		// Create the system namespace.
-		var nsLabels map[string]string
+		nsLabels := map[string]string{}
 		if i.env.IsMultiNetwork() {
-			nsLabels = map[string]string{label.TopologyNetwork.Name: c.NetworkName()}
+			nsLabels[label.TopologyNetwork.Name] = c.NetworkName()
+		}
+		// Add CUDN labels if enabled
+		if i.ctx.Settings().EnableCUDN {
+			nsLabels[namespace.CUDNPrimaryNetworkLabel] = ""
+			if i.ctx.Settings().CUDNSelector != "" {
+				nsLabels[i.ctx.Settings().CUDNSelector] = "true"
+			}
 		}
 		var nsAnnotations map[string]string
 		if c.IsRemote() {
@@ -828,10 +846,19 @@ func (i *istioImpl) configureRemoteConfigForControlPlane(c cluster.Cluster) erro
 
 	scopes.Framework.Infof("configuring external control plane in %s to use config cluster %s", c.Name(), configCluster.Name())
 	// ensure system namespace exists
+	nsLabels := map[string]string{}
+	// Add CUDN labels if enabled (OpenShift specific)
+	if i.ctx.Settings().EnableCUDN {
+		nsLabels[namespace.CUDNPrimaryNetworkLabel] = ""
+		if i.ctx.Settings().CUDNSelector != "" {
+			nsLabels[i.ctx.Settings().CUDNSelector] = "true"
+		}
+	}
 	if _, err = c.Kube().CoreV1().Namespaces().
 		Create(context.TODO(), &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: i.cfg.SystemNamespace,
+				Name:   i.cfg.SystemNamespace,
+				Labels: nsLabels,
 			},
 		}, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
 		return err
@@ -866,6 +893,40 @@ func (i *istioImpl) configureRemoteConfigForControlPlane(c cluster.Cluster) erro
 		}
 	}
 	return nil
+}
+
+func (i *istioImpl) ensureSystemNamespaceWithLabels(c cluster.Cluster) error {
+	nsLabels := map[string]string{}
+
+	if i.ctx.Settings().EnableCUDN {
+		nsLabels[namespace.CUDNPrimaryNetworkLabel] = ""
+		if i.ctx.Settings().CUDNSelector != "" {
+			nsLabels[i.ctx.Settings().CUDNSelector] = "true"
+		}
+	}
+
+	// Verify if the namespace already exists.
+	_, err := c.Kube().CoreV1().Namespaces().Get(context.TODO(), i.cfg.SystemNamespace, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Create namespace with labels
+			_, err := c.Kube().CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   i.cfg.SystemNamespace,
+					Labels: nsLabels,
+				},
+			}, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to create namespace %s: %v", i.cfg.SystemNamespace, err)
+			}
+			scopes.Framework.Infof("Created namespace %s with CUDN labels on cluster %s", i.cfg.SystemNamespace, c.Name())
+			return nil
+		}
+		return fmt.Errorf("failed to get namespace %s: %v", i.cfg.SystemNamespace, err)
+	}
+
+	// Namespace already exists, return error since we cannot add the label later on.
+	return fmt.Errorf("Cannot add the label to an existing namespace %s: %v", i.cfg.SystemNamespace, err)
 }
 
 func (i *istioImpl) UpdateInjectionConfig(t resource.Context, update func(*inject.Config) error, cleanup cleanup.Strategy) error {

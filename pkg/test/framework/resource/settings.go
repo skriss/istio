@@ -197,6 +197,15 @@ type Settings struct {
 
 	// If enabled, native nftable rules will be used for traffic redirection instead of iptable rules.
 	NativeNftables bool
+
+	// EnableCUDN indicates that tests should run in a Primary CUDN network (OpenShift with OVN-K only)
+	EnableCUDN bool
+
+	// CUDNNetworkName is the name of the CUDN network to use for test namespaces
+	CUDNNetworkName string
+
+	// CUDNSelector is the label key used to match namespaces in CUDN CR (e.g., "istio-test-cudn")
+	CUDNSelector string
 }
 
 // SkipVMs changes the skip settings at runtime

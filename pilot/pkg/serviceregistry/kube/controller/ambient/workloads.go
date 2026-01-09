@@ -898,7 +898,6 @@ func podWorkloadBuilder(
 				return n.AsSlice(), nil
 			})
 			if err != nil {
-				// Is this possible? Probably not in typical case, but anyone could put garbage there.
 				return nil
 			}
 		}

@@ -324,6 +324,20 @@ func createNamespaceLabels(ctx resource.Context, cfg Config) map[string]string {
 		}
 	}
 
+	if cfg.EnableCUDN || ctx.Settings().EnableCUDN {
+		// Primary CUDN network label must be empty string
+		l[CUDNPrimaryNetworkLabel] = ""
+
+		// Add selector label which will be used in the CUDN CR
+		selectorKey := cfg.CUDNSelector
+		if selectorKey == "" {
+			selectorKey = ctx.Settings().CUDNSelector
+		}
+		if selectorKey != "" {
+			l[selectorKey] = "true"
+		}
+	}
+
 	// bring over supplied labels
 	for k, v := range cfg.Labels {
 		l[k] = v

@@ -223,6 +223,15 @@ func init() {
 	flag.BoolVar(&settingsFromCommandLine.OpenShift, "istio.test.openshift", settingsFromCommandLine.OpenShift,
 		"Indicate the tests run in an OpenShift platform rather than in plain Kubernetes.")
 
+	flag.BoolVar(&settingsFromCommandLine.EnableCUDN, "istio.test.enableCUDN", settingsFromCommandLine.EnableCUDN,
+		"Enable Primary CUDN network support for test namespaces (requires OpenShift with OVN-K).")
+
+	flag.StringVar(&settingsFromCommandLine.CUDNNetworkName, "istio.test.cudnNetworkName", "p-cudn-network",
+		"Name of the Primary CUDN network to use for test namespaces.")
+
+	flag.StringVar(&settingsFromCommandLine.CUDNSelector, "istio.test.cudnSelector", "cudn-network",
+		"Label key used to select namespaces for CUDN network (namespaces will be labeled with <key>=true).")
+
 	flag.BoolVar(&settingsFromCommandLine.AmbientMultiNetwork, "istio.test.ambient.multinetwork", settingsFromCommandLine.AmbientMultiNetwork,
 		"Indicate the use of ambient multicluster.")
 
