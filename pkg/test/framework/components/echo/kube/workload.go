@@ -174,18 +174,33 @@ func (w *workload) PodName() string {
 
 func (w *workload) Address() string {
 	w.mutex.Lock()
-	ip := w.pod.Status.PodIP
-	w.mutex.Unlock()
-	return ip
+	defer w.mutex.Unlock()
+
+	// Try UDN IP first
+	udnIPs := GetUDNIPs(&w.pod)
+	if len(udnIPs) > 0 {
+		return udnIPs[0]
+	}
+
+	// Fallback to default pod IP
+	return w.pod.Status.PodIP
 }
 
 func (w *workload) Addresses() []string {
 	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	// Try UDN IPs first
+	udnIPs := GetUDNIPs(&w.pod)
+	if len(udnIPs) > 0 {
+		return udnIPs
+	}
+
+	// Fallback to default pod IPs
 	var addresses []string
 	for _, podIP := range w.pod.Status.PodIPs {
 		addresses = append(addresses, podIP.IP)
 	}
-	w.mutex.Unlock()
 	return addresses
 }
 

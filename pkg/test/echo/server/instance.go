@@ -206,30 +206,34 @@ func (s *Instance) getListenerIPs(port *common.Port) ([]string, error) {
 	if _, f := s.BindIPPortsMap[port.Port]; !f {
 		return nil, nil
 	}
-	if ip, f := os.LookupEnv("INSTANCE_IP"); f {
-		return []string{ip}, nil
+
+	// Get instance IPs - tries UDN annotations first, then falls back to INSTANCE_IPS/INSTANCE_IP
+	ips, err := getInstanceIPs()
+	if err != nil {
+		return nil, fmt.Errorf("--bind-ip set but failed to get instance IPs: %w", err)
 	}
-	if r, f := os.LookupEnv("INSTANCE_IPS"); f {
-		ips := strings.Split(r, ",")
-		if bf, f := os.LookupEnv("BIND_FAMILY"); f {
-			bf := strings.ToLower(bf)
-			ips = slices.FilterInPlace(ips, func(s string) bool {
-				ip, err := netip.ParseAddr(s)
-				if err != nil {
-					return false
-				}
-				if bf == "ipv4" && !ip.Is4() {
-					return false
-				}
-				if bf == "ipv6" && !ip.Is6() {
-					return false
-				}
-				return true
-			})
-		}
-		return ips, nil
+
+	log.Infof("instance IPs: %v\n", ips)
+
+	// Apply BIND_FAMILY filter if set
+	if bf, f := os.LookupEnv("BIND_FAMILY"); f {
+		bf := strings.ToLower(bf)
+		ips = slices.FilterInPlace(ips, func(s string) bool {
+			ip, err := netip.ParseAddr(s)
+			if err != nil {
+				return false
+			}
+			if bf == "ipv4" && !ip.Is4() {
+				return false
+			}
+			if bf == "ipv6" && !ip.Is6() {
+				return false
+			}
+			return true
+		})
 	}
-	return nil, fmt.Errorf("--bind-ip set but INSTANCE_IP/INSTANCE_IPS undefined")
+
+	return ips, nil
 }
 
 func (s *Instance) newEndpoint(port *common.Port, listenerIP string, udsServer string) (endpoint.Instance, error) {

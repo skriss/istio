@@ -161,7 +161,7 @@ spec:
 {{- if eq .Port 3333 }}
           name: tcp-health-port
 {{- else if and ($appContainer.ImageFullPath) (eq .Port 17171) }}
-          name: tcp-health-port
+          name: grpc-health
 {{- end }}
 {{- end }}
         env:
@@ -169,6 +169,14 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: status.podIPs
+        - name: NETWORK_STATUS
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['k8s.v1.cni.cncf.io/network-status']
+        - name: POD_NETWORKS
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['k8s.ovn.org/pod-networks']
         - name: NAMESPACE
           valueFrom:
             fieldRef:
